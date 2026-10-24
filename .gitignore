@@ -1,0 +1,10 @@
+# Ignorar entorno virtual y cachés de Python
+.venv/
+__pycache__/
+*.pyc
+
+# Ignorar el dataset pesado de Kaggle (>100MB) y archivos temporales pesados
+data/creditcard.csv
+data/procesado/*.pkl
+resultados/mejores_modelos_entrenados.pkl
+data/*.zip
