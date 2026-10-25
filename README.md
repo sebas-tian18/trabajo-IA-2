@@ -43,6 +43,7 @@ Ejecutar los scripts en orden, desde la raíz del proyecto:
 | 2    | `custom_rf.py` (opcional)       | Verificación rápida del Random Forest propio (bootstrap, semillas por árbol, % de registros únicos)          | ~5 s          |
 | 3    | `02_entrenamiento_cv.py`        | Conteos de SMOTE por fold, Grid Search con CV estratificada de 5 folds para las 8 configuraciones y selección final | ~3-4 min      |
 | 4    | `03_evaluacion_final.py`        | Evaluación en prueba, media ± desviación estándar por modelo (bootstrap), matrices de confusión y gráficos   | ~10 s         |
+| 5    | `04_graficos_complementarios.py` | Gráficos para la presentación: exploración, importancia de variables y comparación árbol vs. Random Forest (solo CV) | ~30-40 s      |
 
 Tiempos medidos en un equipo de 2 núcleos; varían según el computador.
 
@@ -68,6 +69,10 @@ Todas las semillas derivan de `SEED = 42`:
 | `tabla_prueba_media_std(_formateada).csv` | Media ± desviación estándar en prueba por modelo y condición (bootstrap estratificado)  |
 | `matrices_confusion_test.png`             | Matrices de confusión de las 8 configuraciones en prueba                                |
 | `grafico_comparativo_metricas.png`        | Sensibilidad y F1 en prueba con barras de error (bootstrap)                             |
+| `exploracion_datos.png`                   | Distribución de clases y monto por clase (dataset completo, solo descriptivo)           |
+| `importancia_variables.png`               | Importancia de las 30 variables según el selector; destaca las 15 seleccionadas         |
+| `arbol_vs_rf.png`, `tabla_arbol_vs_rf*.csv` | Árbol vs. Random Forest propio fold por fold en CV (sensibilidad, precisión, falsas alarmas) |
+| `curva_numero_arboles.png`, `tabla_numero_arboles.csv` | Efecto del número de árboles del Random Forest propio en CV                |
 | `mejores_modelos_entrenados.pkl`          | Las 8 configuraciones reentrenadas en todo el entrenamiento (no se versiona en git)     |
 
 ## 6. Limitaciones conocidas
