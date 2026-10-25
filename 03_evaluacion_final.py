@@ -13,6 +13,8 @@ from sklearn.metrics import (
 )
 
 SEED = 42
+N_BOOTSTRAP = 1000  # réplicas bootstrap del conjunto de prueba (Sección 4.6)
+METRICAS = ["Sensibilidad", "Especificidad", "Precision", "F1", "Exactitud", "FNR"]
 
 
 def calcular_metricas(y_true, y_pred):
@@ -35,6 +37,55 @@ def calcular_metricas(y_true, y_pred):
         "FP": int(fp),
         "TN": int(tn),
     }
+
+
+def metricas_desde_conteos(tp, fn, fp, tn):
+    """Calcula las 6 métricas a partir de la matriz de confusión (acepta arreglos numpy)."""
+    tp, fn, fp, tn = (np.asarray(v, dtype=float) for v in (tp, fn, fp, tn))
+    sens = np.divide(tp, tp + fn, out=np.zeros_like(tp), where=(tp + fn) > 0)
+    espec = np.divide(tn, tn + fp, out=np.zeros_like(tn), where=(tn + fp) > 0)
+    prec = np.divide(tp, tp + fp, out=np.zeros_like(tp), where=(tp + fp) > 0)  # 0 si no predice fraudes
+    f1 = np.divide(2 * prec * sens, prec + sens, out=np.zeros_like(tp), where=(prec + sens) > 0)
+    exac = (tp + tn) / (tp + fn + fp + tn)
+    return {"Sensibilidad": sens, "Especificidad": espec, "Precision": prec,
+            "F1": f1, "Exactitud": exac, "FNR": 1.0 - sens}
+
+
+def bootstrap_prueba(y_true, predicciones, n_rep=N_BOOTSTRAP, seed=SEED):
+    """
+    Estima media y desviación estándar de cada métrica en PRUEBA mediante bootstrap estratificado:
+    en cada réplica se remuestrean con reemplazo los fraudes y las legítimas por separado,
+    manteniendo las cantidades originales (13 y 7.487), es decir, la distribución real de clases.
+    Los modelos NO se reentrenan ni se ajustan: solo se reevalúan sus predicciones ya hechas.
+    Se usan los MISMOS índices de remuestreo para todos los modelos (comparación pareada).
+    """
+    y_true = np.asarray(y_true)
+    rng = np.random.RandomState(seed)
+    idx_fraude = np.where(y_true == 1)[0]
+    idx_legit = np.where(y_true == 0)[0]
+    muestras = np.array([
+        np.concatenate([
+            rng.choice(idx_fraude, size=len(idx_fraude), replace=True),
+            rng.choice(idx_legit, size=len(idx_legit), replace=True),
+        ])
+        for _ in range(n_rep)
+    ])  # forma (n_rep, n_prueba)
+    yb = y_true[muestras]
+
+    filas = []
+    for config_id, y_pred in predicciones.items():
+        pb = np.asarray(y_pred)[muestras]
+        tp = ((yb == 1) & (pb == 1)).sum(axis=1)
+        fn = ((yb == 1) & (pb == 0)).sum(axis=1)
+        fp = ((yb == 0) & (pb == 1)).sum(axis=1)
+        tn = ((yb == 0) & (pb == 0)).sum(axis=1)
+        m = metricas_desde_conteos(tp, fn, fp, tn)
+        fila = {"Configuracion": config_id}
+        for met in METRICAS:
+            fila[f"{met}_Media"] = m[met].mean()
+            fila[f"{met}_Std"] = m[met].std(ddof=1)
+        filas.append(fila)
+    return pd.DataFrame(filas)
 
 
 def main():
@@ -111,14 +162,38 @@ def main():
         df_test_print[c] = (df_test_print[c] * 100).map(lambda x: f"{x:.2f}%")
     print(df_test_print.to_string(index=False))
 
-    # Media y Desviación Estándar global por condición en Prueba
+    # 3. Media y desviación estándar POR MODELO Y CONDICIÓN en prueba (Sección 4.6)
     print("\n" + "=" * 80)
-    print("3. MEDIA Y DESVIACIÓN ESTÁNDAR ENTRE MODELOS POR CONDICIÓN EN PRUEBA")
+    print(f"3. PRUEBA: MEDIA ± DESVIACIÓN ESTÁNDAR POR MODELO (BOOTSTRAP ESTRATIFICADO, {N_BOOTSTRAP} RÉPLICAS)")
     print("-" * 80)
-    for cond, grp in df_test.groupby("Condicion"):
-        print(f"\nCondición: {cond}")
-        for met in ["Sensibilidad", "FNR", "Especificidad", "Precision", "F1", "Exactitud"]:
-            print(f"  - {met:<15}: {grp[met].mean()*100:6.2f}% ± {grp[met].std()*100:5.2f}%")
+    df_boot = bootstrap_prueba(y_test, predicciones_test)
+    df_boot = df_cv[["Configuracion", "Clasificador", "Condicion"]].merge(df_boot, on="Configuracion")
+    df_boot.to_csv("resultados/tabla_prueba_media_std.csv", index=False)
+
+    tabla_boot_fmt = df_boot[["Clasificador", "Condicion"]].copy()
+    for met in METRICAS:
+        tabla_boot_fmt[met] = [
+            f"{m*100:.2f}% ± {s*100:.2f}%"
+            for m, s in zip(df_boot[f"{met}_Media"], df_boot[f"{met}_Std"])
+        ]
+    print(tabla_boot_fmt.to_string(index=False))
+    tabla_boot_fmt.to_csv("resultados/tabla_prueba_media_std_formateada.csv", index=False)
+
+    # 3b. Desempeño en prueba de la configuración elegida por validación cruzada (pregunta 4.7.4)
+    df_sel = pd.read_csv("resultados/configuracion_seleccionada.csv")
+    cid_sel = df_sel.loc[0, "Configuracion"]
+    puntual = df_test.set_index("Configuracion").loc[cid_sel]
+    boot = df_boot.set_index("Configuracion").loc[cid_sel]
+    print("\n" + "=" * 80)
+    print("3b. CONFIGURACIÓN SELECCIONADA POR VALIDACIÓN CRUZADA Y SU DESEMPEÑO EN PRUEBA")
+    print("-" * 80)
+    print(f"  Configuración   : {cid_sel}")
+    print(f"  Hiperparámetros : {df_sel.loc[0, 'Mejores_Hiperparametros']}")
+    print(f"  Sensibilidad CV : {df_sel.loc[0, 'CV_Sensibilidad_Media']*100:.2f}% ± {df_sel.loc[0, 'CV_Sensibilidad_Std']*100:.2f}%")
+    print(f"  Prueba (puntual): TP={puntual['TP']}  FN={puntual['FN']}  FP={puntual['FP']}  TN={puntual['TN']}")
+    for met in METRICAS:
+        print(f"  {met:<15} prueba: {puntual[met]*100:6.2f}%  (bootstrap: {boot[f'{met}_Media']*100:.2f}% ± {boot[f'{met}_Std']*100:.2f}%)")
+    print("  Nota: la elección se hizo solo con CV; los resultados de prueba no modifican la decisión.")
 
     # 4. Cálculos exactos para responder las preguntas de la Sección 4.7
     print("\n" + "=" * 80)
@@ -177,46 +252,39 @@ def main():
     plt.savefig("resultados/matrices_confusion_test.png", dpi=300)
     plt.close()
 
-    # Gráfico 2: Comparación de Sensibilidad y F1-Score en Prueba
+    # Gráfico 2: Sensibilidad y F1-Score en prueba por modelo y condición.
+    # Altura de la barra = valor puntual en prueba; línea negra = ± 1 desviación estándar (bootstrap).
     fig, axes = plt.subplots(1, 2, figsize=(15, 6))
-    df_plot = df_test.copy()
-    df_plot["Sensibilidad (%)"] = df_plot["Sensibilidad"] * 100
-    df_plot["Precision (%)"] = df_plot["Precision"] * 100
-    df_plot["F1-Score (%)"] = df_plot["F1"] * 100
-
-    sns.barplot(
-        data=df_plot,
-        x="Clasificador",
-        y="Sensibilidad (%)",
-        hue="Condicion",
-        ax=axes[0],
-        palette=["#4C72B0", "#DD8452"],
-    )
-    axes[0].set_title("Sensibilidad en Prueba (Detección de Fraude - Prioridad)", fontweight="bold")
-    axes[0].set_ylim(0, 105)
-    for container in axes[0].containers:
-        axes[0].bar_label(container, fmt="%.1f%%", padding=3, fontsize=9)
-
-    sns.barplot(
-        data=df_plot,
-        x="Clasificador",
-        y="F1-Score (%)",
-        hue="Condicion",
-        ax=axes[1],
-        palette=["#4C72B0", "#DD8452"],
-    )
-    axes[1].set_title("F1-Score en Prueba (Equilibrio Sensibilidad vs Precisión)", fontweight="bold")
-    axes[1].set_ylim(0, 105)
-    for container in axes[1].containers:
-        axes[1].bar_label(container, fmt="%.1f%%", padding=3, fontsize=9)
-
-    plt.tight_layout()
+    colores = {"Sin_Compensacion": "#4C72B0", "Con_Compensacion_SMOTE": "#DD8452"}
+    etiquetas = {"Sin_Compensacion": "Sin compensación", "Con_Compensacion_SMOTE": "Con SMOTE"}
+    x = np.arange(len(orden_modelos))
+    ancho = 0.38
+    for ax, met, titulo in [
+        (axes[0], "Sensibilidad", "Sensibilidad en Prueba (Detección de Fraude - Prioridad)"),
+        (axes[1], "F1", "F1-Score en Prueba (Equilibrio Sensibilidad vs Precisión)"),
+    ]:
+        for k, cond in enumerate(conds):
+            ids = [f"{mod}__{cond}" for mod in orden_modelos]
+            valores = df_test.set_index("Configuracion").loc[ids, met].values * 100
+            errores = df_boot.set_index("Configuracion").loc[ids, f"{met}_Std"].values * 100
+            barras = ax.bar(x + (k - 0.5) * ancho, valores, ancho, yerr=errores, capsize=4,
+                            color=colores[cond], label=etiquetas[cond], error_kw={"elinewidth": 1})
+            ax.bar_label(barras, fmt="%.1f%%", padding=3, fontsize=9, label_type="center", color="white")
+        ax.set_xticks(x, [m.replace("_", " ") for m in orden_modelos])
+        ax.set_ylim(0, 110)
+        ax.set_ylabel(f"{met} (%)")
+        ax.set_title(titulo, fontweight="bold")
+        ax.legend(title="Condición")
+    fig.text(0.5, 0.01, f"Barras de error: ± 1 desviación estándar estimada con bootstrap estratificado ({N_BOOTSTRAP} réplicas) del conjunto de prueba.",
+             ha="center", fontsize=9)
+    plt.tight_layout(rect=[0, 0.03, 1, 1])
     plt.savefig("resultados/grafico_comparativo_metricas.png", dpi=300)
     plt.close()
 
     print("\n[OK] Gráficos generados exitosamente en 'resultados/':")
     print("  - resultados/matrices_confusion_test.png")
     print("  - resultados/grafico_comparativo_metricas.png")
+    print("[OK] Tablas de prueba (media ± std por modelo) en 'resultados/tabla_prueba_media_std*.csv'")
 
 
 if __name__ == "__main__":

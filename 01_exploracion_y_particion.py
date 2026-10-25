@@ -89,7 +89,7 @@ def main():
 
     # Guardar las particiones para garantizar que TODOS los experimentos usen exactamente los mismos datos
     os.makedirs("data/procesado", exist_ok=True)
-    X_train.to_parquet("data/procesado/X_train.parquet") if False else X_train.to_pickle("data/procesado/X_train.pkl")
+    X_train.to_pickle("data/procesado/X_train.pkl")
     X_test.to_pickle("data/procesado/X_test.pkl")
     y_train.to_pickle("data/procesado/y_train.pkl")
     y_test.to_pickle("data/procesado/y_test.pkl")

@@ -1,0 +1,6 @@
+Fold,Train_Legitimas_Antes,Train_Fraudes_Antes,Train_Legitimas_Despues,Train_Fraudes_Despues,Fraudes_Sinteticos_Generados,Validacion_Legitimas,Validacion_Fraudes
+1,13976,24,13976,2795,2771,3495,5
+2,13977,23,13977,2795,2772,3494,6
+3,13977,23,13977,2795,2772,3494,6
+4,13977,23,13977,2795,2772,3494,6
+5,13977,23,13977,2795,2772,3494,6

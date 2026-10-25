@@ -27,6 +27,44 @@ from custom_rf import CustomRandomForest
 warnings.filterwarnings("ignore")
 SEED = 42
 
+# SMOTE (Sección 4.4): los fraudes quedan en 20% de las legítimas (1:5). Balancear 1:1 exigiría
+# ~600 fraudes sintéticos por cada fraude real (~23 por fold). k_neighbors=5 es el valor por defecto.
+SMOTE_RATIO = 0.20
+SMOTE_K = 5
+
+
+def documentar_smote_por_fold(X_train, y_train, skf):
+    """
+    Aplica SMOTE sobre el entrenamiento de cada fold (igual que dentro del pipeline) y
+    registra la cantidad real de ejemplos por clase antes y después. El conjunto de
+    validación de cada fold NO se balancea, por lo que se reporta sin cambios.
+    """
+    filas = []
+    for i, (idx_tr, idx_val) in enumerate(skf.split(X_train, y_train), start=1):
+        X_tr, y_tr = X_train.iloc[idx_tr], y_train.iloc[idx_tr]
+        y_val = y_train.iloc[idx_val]
+        X_tr_esc = StandardScaler().fit_transform(X_tr)  # mismo orden que el pipeline
+        _, y_res = SMOTE(
+            sampling_strategy=SMOTE_RATIO, random_state=SEED, k_neighbors=SMOTE_K
+        ).fit_resample(X_tr_esc, y_tr)
+        filas.append(
+            {
+                "Fold": i,
+                "Train_Legitimas_Antes": int((y_tr == 0).sum()),
+                "Train_Fraudes_Antes": int((y_tr == 1).sum()),
+                "Train_Legitimas_Despues": int((y_res == 0).sum()),
+                "Train_Fraudes_Despues": int((y_res == 1).sum()),
+                "Fraudes_Sinteticos_Generados": int((y_res == 1).sum() - (y_tr == 1).sum()),
+                "Validacion_Legitimas": int((y_val == 0).sum()),
+                "Validacion_Fraudes": int((y_val == 1).sum()),
+            }
+        )
+    df = pd.DataFrame(filas)
+    print(f"\n[A] TRATAMIENTO DEL DESBALANCE: SMOTE(sampling_strategy={SMOTE_RATIO}, k_neighbors={SMOTE_K})")
+    print("    Aplicado SOLO al entrenamiento de cada fold. Validación y prueba no se balancean.\n")
+    print(df.to_string(index=False))
+    return df
+
 
 def specificity_func(y_true, y_pred):
     """Calcula la Especificidad: TN / (TN + FP), equivalente al recall de la clase 0."""
@@ -58,6 +96,29 @@ def criterio_seleccion_desempate(cv_results):
     return int(mejor_entre_empatados)
 
 
+def seleccionar_configuracion_global(df_cv):
+    """
+    Elige UNA configuración final entre las 8 (4 clasificadores x 2 condiciones) con la misma
+    regla usada dentro de cada búsqueda: máxima sensibilidad media en CV y, si hay empate,
+    mayor precisión media de la clase fraude en CV. No usa el conjunto de prueba.
+    """
+    sens = df_cv["CV_Sensibilidad_Media"].round(6)
+    candidatos = df_cv[sens == sens.max()]
+    elegida = candidatos.loc[[candidatos["CV_Precision_Media"].round(6).idxmax()]]
+
+    print("\n" + "=" * 75)
+    print("[D] CONFIGURACIÓN SELECCIONADA MEDIANTE VALIDACIÓN CRUZADA (entre las 8):")
+    print("=" * 75)
+    fila = elegida.iloc[0]
+    print(f"  Configuración   : {fila['Configuracion']}")
+    print(f"  Hiperparámetros : {fila['Mejores_Hiperparametros']}")
+    print(f"  Sensibilidad CV : {fila['CV_Sensibilidad_Media']*100:.2f}% ± {fila['CV_Sensibilidad_Std']*100:.2f}%")
+    print(f"  Precisión CV    : {fila['CV_Precision_Media']*100:.2f}% ± {fila['CV_Precision_Std']*100:.2f}%")
+    if len(candidatos) > 1:
+        print(f"  (Empate en sensibilidad entre {len(candidatos)} configuraciones; se resolvió por precisión)")
+    return elegida
+
+
 def main():
     print("=" * 75)
     print("ENTRENAMIENTO, SELECCIÓN DE CARACTERÍSTICAS Y VALIDACIÓN CRUZADA (5-FOLD)")
@@ -66,20 +127,13 @@ def main():
     X_train = pd.read_pickle("data/procesado/X_train.pkl")
     y_train = pd.read_pickle("data/procesado/y_train.pkl")
 
-    # 1. Documentar efecto de la estrategia de compensación (Sección 4.4)
-    # Mostramos cómo cambia un fold de entrenamiento (80% de X_train) y el X_train completo
-    smote_demo = SMOTE(sampling_strategy=0.20, random_state=SEED, k_neighbors=5)
-    X_res_full, y_res_full = smote_demo.fit_resample(X_train, y_train)
-
-    print("\n[A] DOCUMENTACIÓN DEL TRATAMIENTO DEL DESBALANCE (SMOTE sampling_strategy=0.20):")
-    print(f"  * En X_train completo (antes de SMOTE)  -> Legítimas (0): {(y_train==0).sum():,} | Fraudes (1): {(y_train==1).sum():,}")
-    print(f"  * En X_train completo (después de SMOTE)-> Legítimas (0): {(y_res_full==0).sum():,} | Fraudes (1): {(y_res_full==1).sum():,}")
-    print("  * En cada Fold de entrenamiento (80% de 17,500 = 14,000 filas):")
-    print("    - Antes de SMOTE   : ~13,977 Legítimas (0) y ~23 Fraudes (1)")
-    print("    - Después de SMOTE : ~13,977 Legítimas (0) y ~2,795 Fraudes sintéticos/reales (1)")
-
-    # 2. Definir las 5 particiones estratificadas fijas para TODOS los modelos (Sección 4.5.2 y 4.5.3)
+    # 1. Definir las 5 particiones estratificadas fijas para TODOS los modelos (Sección 4.5.2 y 4.5.3)
     skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
+
+    # 2. Documentar el efecto real de SMOTE en cada fold de entrenamiento (Sección 4.4)
+    df_smote = documentar_smote_por_fold(X_train, y_train, skf)
+    os.makedirs("resultados", exist_ok=True)
+    df_smote.to_csv("resultados/tabla_smote_por_fold.csv", index=False)
 
     # 3. Diccionario de métricas para registrar media y desviación estándar en CV
     scoring = {
@@ -92,11 +146,12 @@ def main():
     }
 
     # 4. Definición de los 4 clasificadores y sus espacios de búsqueda acotados (Sección 4.5.5)
+    #    Grillas pequeñas por costo, con valores desde modelos simples hasta complejos.
     modelos_base = {
         "k-NN": (
             KNeighborsClassifier(),
             {
-                "clf__n_neighbors": [3, 5, 7, 11],
+                "clf__n_neighbors": [3, 5, 7, 11],  # impares: evitan empates en la votación
                 "clf__weights": ["uniform", "distance"],
                 "clf__metric": ["euclidean", "manhattan"],
             },
@@ -120,9 +175,9 @@ def main():
         "Random_Forest_Propio": (
             CustomRandomForest(random_state=SEED),
             {
-                "clf__n_estimators": [25, 51],
+                "clf__n_estimators": [25, 51],  # impares: la votación mayoritaria nunca empata
                 "clf__max_depth": [6, 10, None],
-                "clf__max_features": ["sqrt", "log2"],
+                "clf__max_features": ["sqrt", 0.5],  # 3 vs 7 de 15 variables ("log2" también daría 3)
             },
         ),
     }
@@ -131,7 +186,7 @@ def main():
         ("Sin_Compensacion", None),
         (
             "Con_Compensacion_SMOTE",
-            SMOTE(sampling_strategy=0.20, random_state=SEED, k_neighbors=5),
+            SMOTE(sampling_strategy=SMOTE_RATIO, random_state=SEED, k_neighbors=SMOTE_K),
         ),
     ]
 
@@ -147,13 +202,18 @@ def main():
             config_id = f"{nombre_modelo}__{nombre_cond}"
             t0 = time.time()
 
-            # Construcción del Pipeline sin Fuga de Información (Sección 4.2, 4.4 y 4.5)
+            # Construcción del Pipeline sin Fuga de Información (Sección 4.2, 4.4 y 4.5):
+            # cada paso se ajusta solo con el entrenamiento de cada fold.
+            # Selección (Sección 4.2): importancia de ExtraTrees (capta relaciones no lineales, solo ordena
+            # variables). Las 15 de 30 elegidas concentran ~80% de la importancia; Time y Amount quedan fuera.
             selector = SelectFromModel(
                 ExtraTreesClassifier(n_estimators=50, random_state=SEED),
                 max_features=15,
                 threshold=-np.inf,  # Selecciona exactamente las 15 variables más importantes en cada fold
             )
 
+            # Escalado (Sección 4.1.5): necesario para k-NN y SVM, que usan distancias (Time y Amount tienen
+            # rangos mucho mayores que V1-V28). Neutro para los árboles; se mantiene para un pipeline común.
             pasos = [
                 ("scaler", StandardScaler()),
                 ("feature_selection", selector),
@@ -171,7 +231,7 @@ def main():
                 refit=criterio_seleccion_desempate,
                 cv=skf,
                 n_jobs=-1,
-                 error_score=0.0,
+                error_score="raise",  # si una configuración falla, se detiene en vez de ocultar el error
             )
 
             grid.fit(X_train, y_train)
@@ -223,10 +283,18 @@ def main():
         pickle.dump(mejores_modelos, f)
 
     print("\n" + "=" * 75)
-    print("[C] CARACTERÍSTICAS SELECCIONADAS EN ENTRENAMIENTO (Top 15 por Importancia):")
+    print("[C] CARACTERÍSTICAS SELECCIONADAS AL AJUSTAR CADA CONFIGURACIÓN FINAL EN X_train:")
     print("=" * 75)
-    print(f"Variables elegidas ({len(cols_seleccionadas)}): {cols_seleccionadas}")
+    for config_id, cols in caracteristicas_por_config.items():
+        print(f"  {config_id:<44} ({len(cols)}): {', '.join(cols)}")
+
+    # 5. Selección de la configuración final entre las 8 (Sección 4.5.6 y pregunta 4.7.4).
+    # Se decide SOLO con los resultados de validación cruzada; el conjunto de prueba no participa.
+    df_sel = seleccionar_configuracion_global(df_cv)
+    df_sel.to_csv("resultados/configuracion_seleccionada.csv", index=False)
     print("\n[OK] Resultados de Validación Cruzada guardados en 'resultados/tabla_validacion_cruzada.csv'")
+    print("[OK] Conteos de SMOTE por fold guardados en 'resultados/tabla_smote_por_fold.csv'")
+    print("[OK] Configuración seleccionada guardada en 'resultados/configuracion_seleccionada.csv'")
     print("[OK] Modelos reentrenados en X_train guardados en 'resultados/mejores_modelos_entrenados.pkl'")
 
 
