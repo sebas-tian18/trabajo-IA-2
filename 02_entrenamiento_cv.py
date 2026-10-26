@@ -27,8 +27,6 @@ from custom_rf import CustomRandomForest
 warnings.filterwarnings("ignore")
 SEED = 42
 
-# SMOTE (Sección 4.4): los fraudes quedan en 20% de las legítimas (1:5). Balancear 1:1 exigiría
-# ~600 fraudes sintéticos por cada fraude real (~23 por fold). k_neighbors=5 es el valor por defecto.
 SMOTE_RATIO = 0.20
 SMOTE_K = 5
 
@@ -127,15 +125,15 @@ def main():
     X_train = pd.read_pickle("data/procesado/X_train.pkl")
     y_train = pd.read_pickle("data/procesado/y_train.pkl")
 
-    # 1. Definir las 5 particiones estratificadas fijas para TODOS los modelos (Sección 4.5.2 y 4.5.3)
+    # 1. Definir las 5 particiones estratificadas fijas para TODOS los modelos
     skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
 
-    # 2. Documentar el efecto real de SMOTE en cada fold de entrenamiento (Sección 4.4)
+    # 2. Documentar el efecto real de SMOTE en cada fold de entrenamiento
     df_smote = documentar_smote_por_fold(X_train, y_train, skf)
     os.makedirs("resultados", exist_ok=True)
     df_smote.to_csv("resultados/tabla_smote_por_fold.csv", index=False)
 
-    # 3. Diccionario de métricas para registrar media y desviación estándar en CV
+    # 3. Diccionario de metricas para registrar media y desviación estándar en CV
     scoring = {
         "sensibilidad": make_scorer(recall_score, pos_label=1, zero_division=0),
         "especificidad": make_scorer(specificity_func),
@@ -145,13 +143,13 @@ def main():
         "fnr": make_scorer(fnr_func),
     }
 
-    # 4. Definición de los 4 clasificadores y sus espacios de búsqueda acotados (Sección 4.5.5)
+    # 4. Definición de los 4 clasificadores y sus espacios de búsqueda acotados
     #    Grillas pequeñas por costo, con valores desde modelos simples hasta complejos.
     modelos_base = {
         "k-NN": (
             KNeighborsClassifier(),
             {
-                "clf__n_neighbors": [3, 5, 7, 11],  # impares: evitan empates en la votación
+                "clf__n_neighbors": [3, 5, 7, 11],  # impares: para evitar empates en la votación
                 "clf__weights": ["uniform", "distance"],
                 "clf__metric": ["euclidean", "manhattan"],
             },
@@ -177,7 +175,7 @@ def main():
             {
                 "clf__n_estimators": [25, 51],  # impares: la votación mayoritaria nunca empata
                 "clf__max_depth": [6, 10, None],
-                "clf__max_features": ["sqrt", 0.5],  # 3 vs 7 de 15 variables ("log2" también daría 3)
+                "clf__max_features": ["sqrt", 0.5],  # 3 vs 7 de 15 variables 
             },
         ),
     }
@@ -202,17 +200,16 @@ def main():
             config_id = f"{nombre_modelo}__{nombre_cond}"
             t0 = time.time()
 
-            # Construcción del Pipeline sin Fuga de Información (Sección 4.2, 4.4 y 4.5):
-            # cada paso se ajusta solo con el entrenamiento de cada fold.
+            # Construcción del Pipeline sin Fuga de Información
             # Selección (Sección 4.2): importancia de ExtraTrees (capta relaciones no lineales, solo ordena
-            # variables). Las 15 de 30 elegidas concentran ~80% de la importancia; Time y Amount quedan fuera.
+            # variables). Las 15 de 30 elegidas concentran ~80% de la importancia, Time y Amount quedan fuera.
             selector = SelectFromModel(
                 ExtraTreesClassifier(n_estimators=50, random_state=SEED),
                 max_features=15,
                 threshold=-np.inf,  # Selecciona exactamente las 15 variables más importantes en cada fold
             )
 
-            # Escalado (Sección 4.1.5): necesario para k-NN y SVM, que usan distancias (Time y Amount tienen
+            # Escalado,  necesario para k-NN y SVM, que usan distancias (Time y Amount tienen
             # rangos mucho mayores que V1-V28). Neutro para los árboles; se mantiene para un pipeline común.
             pasos = [
                 ("scaler", StandardScaler()),
@@ -288,7 +285,7 @@ def main():
     for config_id, cols in caracteristicas_por_config.items():
         print(f"  {config_id:<44} ({len(cols)}): {', '.join(cols)}")
 
-    # 5. Selección de la configuración final entre las 8 (Sección 4.5.6 y pregunta 4.7.4).
+    # 5. Selección de la configuración final entre las 8.
     # Se decide SOLO con los resultados de validación cruzada; el conjunto de prueba no participa.
     df_sel = seleccionar_configuracion_global(df_cv)
     df_sel.to_csv("resultados/configuracion_seleccionada.csv", index=False)
